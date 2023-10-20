@@ -11,6 +11,12 @@
 #include <QCache>
 #include <QElapsedTimer>
 
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+#include <QColorSpace>
+#else
+typedef QString QColorSpace;
+#endif
+
 class QVImageCore : public QObject
 {
     Q_OBJECT
@@ -23,6 +29,7 @@ public:
 
         // Only populated if needed for sorting
         qint64 lastModified;
+        qint64 lastCreated;
         qint64 size;
         QString mimeType;
     };
@@ -45,21 +52,26 @@ public:
     struct ReadData
     {
         QPixmap pixmap;
-        QFileInfo fileInfo;
-        QSize size;
+        QString absoluteFilePath;
+        qint64 fileSize;
+        QSize imageSize;
+        QColorSpace targetColorSpace;
     };
 
     explicit QVImageCore(QObject *parent = nullptr);
 
-    void loadFile(const QString &fileName);
-    ReadData readFile(const QString &fileName, bool forCache);
+    void loadFile(const QString &fileName, bool isReloading = false);
+    ReadData readFile(const QString &fileName, const QColorSpace &targetColorSpace, bool forCache);
     void loadPixmap(const ReadData &readData);
     void closeImage();
     QList<CompatibleFile> getCompatibleFiles(const QString &dirPath) const;
     void updateFolderInfo(QString dirPath = QString());
     void requestCaching();
-    void requestCachingFile(const QString &filePath);
+    void requestCachingFile(const QString &filePath, const QColorSpace &targetColorSpace);
     void addToCache(const ReadData &readImageAndFileInfo);
+    static QString getPixmapCacheKey(const QString &absoluteFilePath, const qint64 &fileSize, const QColorSpace &targetColorSpace);
+    QColorSpace getTargetColorSpace() const;
+    QColorSpace detectDisplayColorSpace() const;
 
     void settingsUpdated();
 
@@ -67,7 +79,6 @@ public:
     void setPaused(bool desiredState);
     void setSpeed(int desiredSpeed);
 
-    QPixmap scaleExpensively(const int desiredWidth, const int desiredHeight);
     QPixmap scaleExpensively(const QSizeF desiredSize);
 
     //returned const reference is read-only
@@ -95,10 +106,11 @@ private:
     int sortMode;
     bool sortDescending;
     bool allowMimeContentDetection;
+    int colorSpaceConversion;
 
-    static QCache<QString, QPixmap> pixmapCache;
+    static QCache<QString, ReadData> pixmapCache;
 
-    QPair<QString, qsizetype> lastDirInfo;
+    QPair<QString, int> lastDirInfo;
     unsigned randomSortSeed;
 
     QStringList lastFilesPreloaded;

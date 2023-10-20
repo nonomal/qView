@@ -1,6 +1,7 @@
 #ifndef SCROLLHELPER_H
 #define SCROLLHELPER_H
 
+#include <functional>
 #include <QAbstractScrollArea>
 #include <QElapsedTimer>
 #include <QScrollBar>
@@ -12,10 +13,10 @@ class ScrollHelper : public QObject
 public:
     struct Parameters
     {
-        QRect ContentRect;
-        QRect UsableViewportRect;
-        bool ShouldConstrain;
-        bool ShouldCenter;
+        QRect contentRect;
+        QRect usableViewportRect;
+        bool shouldConstrain;
+        bool shouldCenter;
     };
 
     typedef std::function<void(Parameters &)> GetParametersCallback;

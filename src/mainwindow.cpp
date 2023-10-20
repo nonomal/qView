@@ -44,7 +44,7 @@ MainWindow::MainWindow(QWidget *parent) :
     justLaunchedWithImage = false;
     storedWindowState = Qt::WindowNoState;
 
-    // Initialize graphicsview
+    // Initialize graphicsviewkDefaultBufferAlignment
     graphicsView = new QVGraphicsView(this);
     centralWidget()->layout()->addWidget(graphicsView);
 
@@ -323,7 +323,8 @@ void MainWindow::fileChanged()
     populateOpenWithTimer->start();
     disableActions();
 
-    refreshProperties();
+    if (info->isVisible())
+        refreshProperties();
     buildWindowTitle();
     setWindowSize();
 }
@@ -453,7 +454,7 @@ void MainWindow::buildWindowTitle()
         }
         case 2:
         {
-            newString = QString::number(graphicsView->getCurrentScale() * 100.0, 'f', 1) + "%";
+            newString = QString::number(graphicsView->getZoomLevel() * 100.0, 'f', 1) + "%";
             newString += " - " + QString::number(getCurrentFileDetails().loadedIndexInFolder+1);
             newString += "/" + QString::number(getCurrentFileDetails().folderFileInfoList.count());
             newString += " - " + getCurrentFileDetails().fileInfo.fileName();
@@ -461,7 +462,7 @@ void MainWindow::buildWindowTitle()
         }
         case 3:
         {
-            newString = QString::number(graphicsView->getCurrentScale() * 100.0, 'f', 1) + "%";
+            newString = QString::number(graphicsView->getZoomLevel() * 100.0, 'f', 1) + "%";
             newString += " - " + QString::number(getCurrentFileDetails().loadedIndexInFolder+1);
             newString += "/" + QString::number(getCurrentFileDetails().folderFileInfoList.count());
             newString += " - " + getCurrentFileDetails().fileInfo.fileName();
@@ -508,13 +509,8 @@ void MainWindow::setWindowSize()
     qreal minWindowResizedPercentage = qvApp->getSettingsManager().getInteger("minwindowresizedpercentage")/100.0;
     qreal maxWindowResizedPercentage = qvApp->getSettingsManager().getInteger("maxwindowresizedpercentage")/100.0;
 
-
-    QSize imageSize = graphicsView->getEffectiveOriginalSize().toSize();
-    imageSize -= QSize(4, 4);
-
-
     // Try to grab the current screen
-    QScreen *currentScreen = screenAt(geometry().center());
+    QScreen *currentScreen = screenContaining(frameGeometry());
 
     // makeshift validity check
     bool screenValid = QGuiApplication::screens().contains(currentScreen);
@@ -522,56 +518,64 @@ void MainWindow::setWindowSize()
     if (!screenValid)
         currentScreen = QGuiApplication::screens().at(0);
 
-    const QSize screenSize = currentScreen->size();
-
-    const QSize minWindowSize = screenSize * minWindowResizedPercentage;
-    const QSize maxWindowSize = screenSize * maxWindowResizedPercentage;
-
-    if (imageSize.width() < minWindowSize.width() && imageSize.height() < minWindowSize.height())
-    {
-        imageSize.scale(minWindowSize, Qt::KeepAspectRatio);
-    }
-    else if (imageSize.width() > maxWindowSize.width() || imageSize.height() > maxWindowSize.height())
-    {
-        imageSize.scale(maxWindowSize, Qt::KeepAspectRatio);
-    }
-
-    // Windows reports the wrong minimum width, so we constrain the image size relative to the dpi to stop weirdness with tiny images
-#ifdef Q_OS_WIN
-    auto minimumImageSize = QSize(qRound(logicalDpiX()*1.5), logicalDpiY()/2);
-    if (imageSize.boundedTo(minimumImageSize) == imageSize)
-        imageSize = minimumImageSize;
-#endif
-
-    // Adjust image size for fullsizecontentview on mac
-#ifdef COCOA_LOADED
-    int obscuredHeight = QVCocoaFunctions::getObscuredHeight(window()->windowHandle());
-    imageSize.setHeight(imageSize.height() + obscuredHeight);
-#endif
+    QSize extraWidgetsSize { 0, 0 };
 
     if (menuBar()->isVisible())
-        imageSize.setHeight(imageSize.height() + menuBar()->height());
+        extraWidgetsSize.rheight() += menuBar()->height();
+
+    int titlebarOverlap = 0;
+#ifdef COCOA_LOADED
+    // To account for fullsizecontentview on mac
+    titlebarOverlap = QVCocoaFunctions::getObscuredHeight(window()->windowHandle());
+#endif
+    if (titlebarOverlap != 0)
+        extraWidgetsSize.rheight() += titlebarOverlap;
+
+    const QSize windowFrameSize = frameGeometry().size() - geometry().size();
+    const QSize hardLimitSize = currentScreen->availableSize() - windowFrameSize - extraWidgetsSize;
+    const QSize screenSize = currentScreen->size();
+    const QSize minWindowSize = (screenSize * minWindowResizedPercentage).boundedTo(hardLimitSize);
+    const QSize maxWindowSize = (screenSize * maxWindowResizedPercentage).boundedTo(hardLimitSize);
+    const QSizeF imageSize = graphicsView->getEffectiveOriginalSize();
+    const int fitOverscan = graphicsView->getFitOverscan();
+    const QSize fitOverscanSize = QSize(fitOverscan * 2, fitOverscan * 2);
+
+    QSize targetSize = imageSize.toSize() - fitOverscanSize;
+
+    if (targetSize.width() > maxWindowSize.width() || targetSize.height() > maxWindowSize.height())
+    {
+        const QSizeF viewSize = maxWindowSize + fitOverscanSize;
+        const qreal fitRatio = qMin(viewSize.width() / imageSize.width(), viewSize.height() / imageSize.height());
+        targetSize = (imageSize * fitRatio).toSize() - fitOverscanSize;
+    }
+
+    targetSize = targetSize.expandedTo(minWindowSize).boundedTo(maxWindowSize);
 
     // Match center after new geometry
     // This is smoother than a single geometry set for some reason
     QRect oldRect = geometry();
-    resize(imageSize);
+    resize(targetSize + extraWidgetsSize);
     QRect newRect = geometry();
     newRect.moveCenter(oldRect.center());
 
-    // Ensure titlebar is not above the top of the screen
-    const int titlebarHeight = QApplication::style()->pixelMetric(QStyle::PM_TitleBarHeight);
-    const int topOfScreen = currentScreen->availableGeometry().y();
-
-    if (newRect.y() < (topOfScreen + titlebarHeight))
-        newRect.setY(topOfScreen + titlebarHeight);
+    // Ensure titlebar is not above or below the available screen area
+    const QRect availableScreenRect = currentScreen->availableGeometry();
+    const int topFrameHeight = geometry().top() - frameGeometry().top();
+    const int windowMinY = availableScreenRect.top() + topFrameHeight;
+    const int windowMaxY = availableScreenRect.top() + availableScreenRect.height() - titlebarOverlap;
+    if (newRect.top() < windowMinY)
+        newRect.moveTop(windowMinY);
+    if (newRect.top() > windowMaxY)
+        newRect.moveTop(windowMaxY);
 
     setGeometry(newRect);
 }
 
-// literally just copy pasted from Qt source code to maintain compatibility with 5.9 (although i've edited it now)
-QScreen *MainWindow::screenAt(const QPoint &point)
+// Initially copied from Qt source code (QGuiApplication::screenAt) and then customized
+QScreen *MainWindow::screenContaining(const QRect &rect)
 {
+    QScreen *bestScreen = nullptr;
+    int bestScreenArea = 0;
     QVarLengthArray<const QScreen *, 8> visitedScreens;
     const auto screens = QGuiApplication::screens();
     for (const QScreen *screen : screens) {
@@ -580,12 +584,16 @@ QScreen *MainWindow::screenAt(const QPoint &point)
         // The virtual siblings include the screen itself, so iterate directly
         const auto siblings = screen->virtualSiblings();
         for (QScreen *sibling : siblings) {
-            if (sibling->geometry().contains(point))
-                return sibling;
+            const QRect intersect = sibling->geometry().intersected(rect);
+            const int area = intersect.width() * intersect.height();
+            if (area > bestScreenArea) {
+                bestScreen = sibling;
+                bestScreenArea = area;
+            }
             visitedScreens.append(sibling);
         }
     }
-    return nullptr;
+    return bestScreen;
 }
 
 bool MainWindow::getIsPixmapLoaded() const
@@ -680,6 +688,11 @@ void MainWindow::pickUrl()
         inputDialog->deleteLater();
     });
     inputDialog->open();
+}
+
+void MainWindow::reloadFile()
+{
+    graphicsView->reloadFile();
 }
 
 void MainWindow::openWith(const OpenWith::OpenWithItem &openWithItem)
@@ -1109,7 +1122,6 @@ void MainWindow::toggleFullScreen()
     if (windowState() == Qt::WindowFullScreen)
     {
         setWindowState(storedWindowState);
-        setWindowSize();
     }
     else
     {

@@ -41,7 +41,7 @@ public:
 
     MainWindow *getMainWindow(bool shouldBeEmpty);
 
-    void checkUpdates();
+    void checkUpdates(bool isStartupCheck);
 
     void checkedUpdates();
 
@@ -63,8 +63,6 @@ public:
 
     QMenuBar *getMenuBar() const {  return menuBar; }
 
-    const QStringList &getFilterList() const { return filterList; }
-
     const QStringList &getNameFilterList() const { return nameFilterList; }
 
     const QStringList &getFileExtensionList() const { return fileExtensionList; }
@@ -77,6 +75,8 @@ public:
 
     ActionManager &getActionManager() { return actionManager; }
 
+    static qreal getPerceivedBrightness(const QColor &color);
+
 private:
 
     QList<MainWindow*> lastActiveWindows;
@@ -85,7 +85,6 @@ private:
 
     QMenuBar *menuBar;
 
-    QStringList filterList;
     QStringList nameFilterList;
     QStringList fileExtensionList;
     QStringList mimeTypeNameList;
